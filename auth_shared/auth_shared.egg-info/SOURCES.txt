@@ -1,0 +1,8 @@
+pyproject.toml
+setup.py
+auth_shared/__init__.py
+auth_shared/jwt.py
+auth_shared.egg-info/PKG-INFO
+auth_shared.egg-info/SOURCES.txt
+auth_shared.egg-info/dependency_links.txt
+auth_shared.egg-info/top_level.txt

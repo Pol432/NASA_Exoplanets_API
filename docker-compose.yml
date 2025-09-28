@@ -1,0 +1,28 @@
+services:
+  web:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://exoplanet_user:exoplanet_pass@db:5432/exoplanet_research
+      - SECRET_KEY=your-secret-key-here
+      - DEBUG=false
+    depends_on:
+      - db
+    volumes:
+      - ./uploads:/app/uploads
+      - ./app/ml/saved_models:/app/app/ml/saved_models
+
+  db:
+    image: postgres:15
+    environment:
+      - POSTGRES_USER=exoplanet_user
+      - POSTGRES_PASSWORD=exoplanet_pass
+      - POSTGRES_DB=exoplanet_research
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+volumes:
+  postgres_data:
