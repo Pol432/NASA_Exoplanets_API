@@ -9,16 +9,18 @@ logger = logging.getLogger(__name__)
 
 class CSVProcessor:
     
-    # Expected Kepler dataset columns
+    # Core required columns from the CSV format you provided
     REQUIRED_COLUMNS = [
-        'kepid', 'koi_period', 'koi_depth', 'koi_duration', 'koi_impact',
-        'koi_teq', 'koi_insol', 'koi_model_snr', 'koi_steff', 'koi_slogg',
-        'koi_srad', 'ra', 'dec', 'koi_kepmag'
+        'koi_period', 'koi_depth', 'koi_duration', 'koi_impact',
+        'koi_insol', 'koi_model_snr', 'koi_steff', 'koi_slogg',
+        'koi_srad', 'ra', 'dec', 'koi_kepmag', 'koi_score'
     ]
     
     OPTIONAL_COLUMNS = [
-        'kepoi_name', 'kepler_name', 'koi_time0bk', 'koi_prad', 'koi_tce_plnt_num',
-        'koi_disposition', 'koi_pdisposition', 'koi_score'
+        'kepid', 'kepoi_name', 'kepler_name', 'koi_time0bk', 'koi_prad', 
+        'koi_tce_plnt_num', 'koi_disposition', 'koi_pdisposition', 'koi_teq',
+        # Flag columns from your CSV format
+        'koi_fpflag_nt', 'koi_fpflag_ss', 'koi_fpflag_co', 'koi_fpflag_ec'
     ]
     
     ERROR_COLUMNS = [
@@ -52,7 +54,7 @@ class CSVProcessor:
                 f"Missing required columns: {', '.join(missing_required)}"
             )
         
-        # Check for optional columns
+        # Check for optional columns (just log, don't fail)
         missing_optional = set(cls.OPTIONAL_COLUMNS) - set(df.columns)
         if missing_optional:
             validation_result["missing_optional"] = list(missing_optional)
@@ -60,14 +62,19 @@ class CSVProcessor:
                 f"Missing optional columns: {', '.join(missing_optional)}"
             )
         
-        # Check for extra columns
+        # Missing error columns are acceptable
+        missing_error = set(cls.ERROR_COLUMNS) - set(df.columns)
+        if missing_error:
+            validation_result["warnings"].append(
+                f"Missing error columns (will be filled with 0): {', '.join(missing_error)}"
+            )
+        
+        # Check for extra columns (informational only)
         all_expected = set(cls.REQUIRED_COLUMNS + cls.OPTIONAL_COLUMNS + cls.ERROR_COLUMNS)
         extra_columns = set(df.columns) - all_expected
         if extra_columns:
             validation_result["extra_columns"] = list(extra_columns)
-            validation_result["warnings"].append(
-                f"Extra columns found: {', '.join(extra_columns)}"
-            )
+            logger.info(f"Extra columns found (will be ignored): {', '.join(extra_columns)}")
         
         # Data quality checks
         data_issues = cls._check_data_quality(df)
@@ -92,7 +99,7 @@ class CSVProcessor:
         # Check for invalid ranges
         range_checks = {
             'koi_period': (0, 10000),  # days
-            'koi_depth': (0, 1),       # relative depth
+            'koi_depth': (0, None),    # relative depth (no upper limit due to outliers)
             'koi_teq': (0, 5000),      # Kelvin
             'koi_steff': (2000, 10000), # Kelvin
             'koi_srad': (0, 50),       # solar radii
@@ -102,7 +109,11 @@ class CSVProcessor:
         
         for col, (min_val, max_val) in range_checks.items():
             if col in df.columns:
-                out_of_range = ((df[col] < min_val) | (df[col] > max_val)).sum()
+                if max_val is not None:
+                    out_of_range = ((df[col] < min_val) | (df[col] > max_val)).sum()
+                else:
+                    out_of_range = (df[col] < min_val).sum()
+                
                 if out_of_range > 0:
                     issues.append(f"Column '{col}' has {out_of_range} values out of expected range")
         
@@ -149,7 +160,10 @@ class CSVProcessor:
                 detail=f"CSV parsing error: {str(e)}"
             )
         except Exception as e:
-            logger.error(f"Error processing CSV: {e}")
+            import traceback
+            error_details = traceback.format_exc()
+            logger.error(f"Error processing CSV: {str(e)}")
+            logger.error(f"Full traceback: {error_details}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Error processing CSV file: {str(e)}"
@@ -161,7 +175,11 @@ class CSVProcessor:
         df_clean = df.copy()
         
         # Convert numeric columns
-        numeric_columns = cls.REQUIRED_COLUMNS + cls.ERROR_COLUMNS
+        numeric_columns = cls.REQUIRED_COLUMNS + cls.ERROR_COLUMNS + [
+            col for col in cls.OPTIONAL_COLUMNS 
+            if col not in ['kepoi_name', 'kepler_name', 'koi_disposition', 'koi_pdisposition']
+        ]
+        
         for col in numeric_columns:
             if col in df_clean.columns:
                 df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce')
@@ -175,6 +193,17 @@ class CSVProcessor:
             if col in df_clean.columns:
                 df_clean[col] = df_clean[col].astype(str).str.strip()
                 df_clean[col] = df_clean[col].replace('nan', np.nan)
+        
+        # Add missing error columns with 0 values
+        for err_col in cls.ERROR_COLUMNS:
+            if err_col not in df_clean.columns:
+                df_clean[err_col] = 0.0
+                logger.info(f"Added missing error column '{err_col}' with default value 0")
+        
+        # If kepid is missing, generate sequential IDs
+        if 'kepid' not in df_clean.columns:
+            df_clean['kepid'] = range(1, len(df_clean) + 1)
+            logger.warning("kepid column missing, generated sequential IDs")
         
         return df_clean
     
@@ -194,9 +223,10 @@ class CSVProcessor:
             return False
         
         # Check if we have enough non-null values for prediction
-        for feature in ml_required_features:
+        critical_features = ['koi_period', 'koi_depth', 'koi_duration', 'koi_steff', 'koi_score']
+        for feature in critical_features:
             if df[feature].isnull().all():
-                logger.warning(f"Feature '{feature}' is completely null")
+                logger.warning(f"Critical feature '{feature}' is completely null")
                 return False
         
         return True
@@ -215,4 +245,8 @@ class CSVProcessor:
         # Convert NaN to None for database
         df_db = df_db.where(pd.notna(df_db), None)
         
-        return df_db[all_columns]  # Return only expected columns in correct order
+        # Only return columns that are in the database schema
+        # Exclude flag columns that aren't in the database model
+        db_columns = [col for col in all_columns if not col.startswith('koi_fpflag_')]
+        
+        return df_db[[col for col in db_columns if col in df_db.columns]]

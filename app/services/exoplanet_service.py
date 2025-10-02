@@ -6,6 +6,9 @@ from app.models.exoplanet import ExoplanetCandidate, AnalysisStatus, FinalVerdic
 from app.schemas.exoplanet import ExoplanetCandidateCreate, ExoplanetCandidateUpdate
 import pandas as pd
 from datetime import datetime
+import logging
+
+logger = logging.getLogger(__name__)
 
 class ExoplanetService:
     def __init__(self, db: Session):
@@ -121,20 +124,97 @@ class ExoplanetService:
         """Create multiple candidates from CSV data"""
         candidates = []
         
-        for _, row in df.iterrows():
-            # Convert row to dict and handle NaN values
-            row_dict = row.to_dict()
-            row_dict = {k: (v if pd.notna(v) else None) for k, v in row_dict.items()}
+        try:
+            for idx, row in df.iterrows():
+                try:
+                    # Convert row to dict and handle NaN values
+                    row_dict = row.to_dict()
+                    row_dict = {k: (v if pd.notna(v) else None) for k, v in row_dict.items()}
+                    
+                    # Add filename
+                    row_dict['original_csv_filename'] = filename
+                    
+                    # Create candidate directly without schema validation first
+                    db_candidate = ExoplanetCandidate(
+                        researcher_id=user_id,
+                        original_csv_filename=filename,
+                        # Core identification
+                        kepid=row_dict.get('kepid'),
+                        kepoi_name=row_dict.get('kepoi_name'),
+                        kepler_name=row_dict.get('kepler_name'),
+                        # Orbital parameters
+                        koi_period=row_dict.get('koi_period'),
+                        koi_period_err1=row_dict.get('koi_period_err1'),
+                        koi_period_err2=row_dict.get('koi_period_err2'),
+                        koi_time0bk=row_dict.get('koi_time0bk'),
+                        koi_time0bk_err1=row_dict.get('koi_time0bk_err1'),
+                        koi_time0bk_err2=row_dict.get('koi_time0bk_err2'),
+                        # Transit parameters
+                        koi_impact=row_dict.get('koi_impact'),
+                        koi_impact_err1=row_dict.get('koi_impact_err1'),
+                        koi_impact_err2=row_dict.get('koi_impact_err2'),
+                        koi_duration=row_dict.get('koi_duration'),
+                        koi_duration_err1=row_dict.get('koi_duration_err1'),
+                        koi_duration_err2=row_dict.get('koi_duration_err2'),
+                        koi_depth=row_dict.get('koi_depth'),
+                        koi_depth_err1=row_dict.get('koi_depth_err1'),
+                        koi_depth_err2=row_dict.get('koi_depth_err2'),
+                        # Planet properties
+                        koi_prad=row_dict.get('koi_prad'),
+                        koi_prad_err1=row_dict.get('koi_prad_err1'),
+                        koi_prad_err2=row_dict.get('koi_prad_err2'),
+                        koi_teq=row_dict.get('koi_teq'),
+                        koi_teq_err1=row_dict.get('koi_teq_err1'),
+                        koi_teq_err2=row_dict.get('koi_teq_err2'),
+                        # Insolation flux
+                        koi_insol=row_dict.get('koi_insol'),
+                        koi_insol_err1=row_dict.get('koi_insol_err1'),
+                        koi_insol_err2=row_dict.get('koi_insol_err2'),
+                        # Model parameters
+                        koi_model_snr=row_dict.get('koi_model_snr'),
+                        koi_tce_plnt_num=row_dict.get('koi_tce_plnt_num'),
+                        koi_steff=row_dict.get('koi_steff'),
+                        koi_steff_err1=row_dict.get('koi_steff_err1'),
+                        koi_steff_err2=row_dict.get('koi_steff_err2'),
+                        # Stellar parameters
+                        koi_slogg=row_dict.get('koi_slogg'),
+                        koi_slogg_err1=row_dict.get('koi_slogg_err1'),
+                        koi_slogg_err2=row_dict.get('koi_slogg_err2'),
+                        koi_srad=row_dict.get('koi_srad'),
+                        koi_srad_err1=row_dict.get('koi_srad_err1'),
+                        koi_srad_err2=row_dict.get('koi_srad_err2'),
+                        # Coordinates and magnitude
+                        ra=row_dict.get('ra'),
+                        dec=row_dict.get('dec'),
+                        koi_kepmag=row_dict.get('koi_kepmag'),
+                        # Disposition and scores
+                        koi_disposition=row_dict.get('koi_disposition'),
+                        koi_pdisposition=row_dict.get('koi_pdisposition'),
+                        koi_score=row_dict.get('koi_score')
+                    )
+                    
+                    self.db.add(db_candidate)
+                    candidates.append(db_candidate)
+                    
+                except Exception as row_error:
+                    logger.error(f"Error processing row {idx}: {str(row_error)}")
+                    logger.error(f"Row data: {row_dict}")
+                    raise
             
-            candidate_data = ExoplanetCandidateCreate(
-                original_csv_filename=filename,
-                **row_dict
-            )
+            # Commit all at once
+            self.db.commit()
             
-            candidate = self.create_candidate(candidate_data, user_id)
-            candidates.append(candidate)
-        
-        return candidates
+            # Refresh all candidates
+            for candidate in candidates:
+                self.db.refresh(candidate)
+            
+            logger.info(f"Successfully created {len(candidates)} candidates from CSV")
+            return candidates
+            
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"Error in bulk_create_from_csv: {str(e)}")
+            raise
     
     def get_candidates_needing_analysis(self) -> List[ExoplanetCandidate]:
         """Get candidates that need AI analysis"""

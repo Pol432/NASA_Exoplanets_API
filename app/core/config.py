@@ -36,8 +36,8 @@ class Settings(BaseSettings):
     ALLOWED_FILE_EXTENSIONS: List[str] = [".csv"]
     
     # ML Model Configuration
-    ML_MODEL_PATH: str = "app/ml/saved_models/exoplanet_svm_model.joblib"
-    SCALER_PATH: str = "app/ml/saved_models/scaler.joblib"
+    ML_MODEL_PATH: str = "app/ml/saved_models/exoplanet_svm_model.pkl"
+    SCALER_PATH: str = "app/ml/saved_models/scaler.pkl"
     ENABLE_MODEL_RETRAINING: bool = False
     
     # Organization Configuration

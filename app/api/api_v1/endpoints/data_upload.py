@@ -42,13 +42,17 @@ async def upload_csv(
         df, validation_result = CSVProcessor.process_csv_content(content, file.filename)
         
         logger.info(f"Processing CSV upload from user {current_user.id}: {file.filename}")
+        logger.info(f"Validation result: {validation_result}")
         
         # Create exoplanet service instance
         exoplanet_service = ExoplanetService(db)
         
+        # Prepare data for database
+        df_prepared = CSVProcessor.prepare_for_database(df)
+        
         # Create candidates from CSV data
         candidates = exoplanet_service.bulk_create_from_csv(
-            df=df,
+            df=df_prepared,
             filename=file.filename,
             user_id=current_user.id
         )
@@ -59,16 +63,20 @@ async def upload_csv(
             message=f"Successfully uploaded {len(candidates)} exoplanet candidates",
             candidates_created=len(candidates),
             upload_id=upload_id,
-            filename=file.filename
+            filename=file.filename,
+            warnings=validation_result.get("warnings", [])
         )
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error processing CSV upload: {e}")
+        import traceback
+        error_details = traceback.format_exc()
+        logger.error(f"Error processing CSV upload: {str(e)}")
+        logger.error(f"Full traceback: {error_details}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Error processing CSV file"
+            detail=f"Error processing CSV file: {str(e)}"
         )
 
 @router.get("/uploads/me", response_model=List[ExoplanetCandidateSummary])
