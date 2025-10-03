@@ -14,7 +14,6 @@ import logging
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-
 @router.post("/upload-csv", response_model=CSVUploadResponse, status_code=status.HTTP_201_CREATED)
 async def upload_csv(
     file: UploadFile = File(...),
@@ -30,10 +29,8 @@ async def upload_csv(
             detail="Only CSV files are allowed"
         )
     
-    # Read content
-    content = await file.read()
-
     # Check file size
+    content = await file.read()
     if len(content) > settings.MAX_FILE_SIZE:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
@@ -45,13 +42,17 @@ async def upload_csv(
         df, validation_result = CSVProcessor.process_csv_content(content, file.filename)
         
         logger.info(f"Processing CSV upload from user {current_user.id}: {file.filename}")
+        logger.info(f"Validation result: {validation_result}")
         
         # Create exoplanet service instance
         exoplanet_service = ExoplanetService(db)
         
+        # Prepare data for database
+        df_prepared = CSVProcessor.prepare_for_database(df)
+        
         # Create candidates from CSV data
         candidates = exoplanet_service.bulk_create_from_csv(
-            df=df,
+            df=df_prepared,
             filename=file.filename,
             user_id=current_user.id
         )
@@ -62,18 +63,21 @@ async def upload_csv(
             message=f"Successfully uploaded {len(candidates)} exoplanet candidates",
             candidates_created=len(candidates),
             upload_id=upload_id,
-            filename=file.filename
+            filename=file.filename,
+            warnings=validation_result.get("warnings", [])
         )
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error processing CSV upload: {e}")
+        import traceback
+        error_details = traceback.format_exc()
+        logger.error(f"Error processing CSV upload: {str(e)}")
+        logger.error(f"Full traceback: {error_details}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Error processing CSV file"
+            detail=f"Error processing CSV file: {str(e)}"
         )
-
 
 @router.get("/uploads/me", response_model=List[ExoplanetCandidateSummary])
 def get_my_uploads(
@@ -90,7 +94,6 @@ def get_my_uploads(
         user_id=current_user.id
     )
     return candidates
-
 
 @router.get("/uploads/{candidate_id}", response_model=ExoplanetCandidateResponse)
 def get_upload_details(
@@ -110,7 +113,6 @@ def get_upload_details(
     
     return candidate
 
-
 @router.delete("/uploads/{candidate_id}", status_code=status.HTTP_200_OK)
 def delete_upload(
     candidate_id: int,
@@ -121,7 +123,6 @@ def delete_upload(
     exoplanet_service = ExoplanetService(db)
     exoplanet_service.delete_candidate(candidate_id, current_user.id)
     return {"message": "Candidate deleted successfully"}
-
 
 @router.get("/candidates", response_model=List[ExoplanetCandidateSummary])
 def list_all_candidates(
