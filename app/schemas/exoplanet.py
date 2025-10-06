@@ -120,3 +120,4 @@ class CSVUploadResponse(BaseModel):
     candidates_created: int
     upload_id: str
     filename: str
+    warnings: Optional[List[str]] = None
